@@ -1,0 +1,5 @@
+---
+- name: Join to cluster
+  shell: kubeadm join  {{ hostvars[groups['kube-masters'][0]].ansible_ssh_host }}:6443 --token {{ kube_token }} --discovery-token-unsafe-skip-ca-verification --skip-preflight-checks && touch /root/.kube_joined
+  args:
+    creates: /root/.kube_joined

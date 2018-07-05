@@ -1,0 +1,39 @@
+---
+- name: Ensure dashboard and heapster yaml directories exist
+  become: 'yes'
+  become_user: kube
+  file: dest={{ item }} state=directory
+  with_items:
+    - /home/kube/heapster
+    - /home/kube/dashboard
+
+- name: Copy Heapster deploys
+  become: 'yes'
+  become_user: kube
+  copy: src="{{ item }}" dest=/home/kube/heapster/
+  with_fileglob:
+    - heapster/*
+
+- name: Copy Dashboard deploys
+  become: 'yes'
+  become_user: kube
+  copy: src=dashboard/kubernetes-dashboard.yaml dest=/home/kube/dashboard/
+
+- name: Apply heapster
+  shell: kubectl apply -f /home/kube/heapster
+  become: 'yes'
+  become_user: kube
+
+#- pause: minutes=5
+
+- name: Apply dashboard
+  shell: kubectl apply -f /home/kube/dashboard
+  become: 'yes'
+  become_user: kube
+
+- name: Opening port 6443 for all connections
+  iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: 6443
+    jump: ACCEPT

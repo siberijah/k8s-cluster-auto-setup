@@ -1,0 +1,156 @@
+---
+- name: Run kubeadm init
+  shell: "kubeadm init --pod-network-cidr={{ kube_pod_network_cidr }} --token {{ kube_token }} --apiserver-advertise-address={{ ansible_default_ipv4.address }} --skip-preflight-checks"
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Add user for kube
+  user:
+    name: kube
+    system: 'yes'
+    state: present
+
+- name: Ensure directory for kube config exists
+  file:
+    path: /home/kube/.kube
+    owner: kube
+    group: kube
+    state: directory
+
+- name: Ensure directory for kube config exists
+  file:
+    path: /root/.kube
+    state: directory
+
+- name: Copy config for kube
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /home/kube/.kube/config
+    owner: kube
+    group: kube
+    remote_src: 'yes'
+
+- name: Copy config for root
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /root/.kube/config
+    remote_src: 'yes'
+
+- name: Add KUBECONFIG env var for kube user
+  lineinfile:
+    path: /home/kube/.bashrc
+    line: 'export KUBECONFIG=$HOME/.kube/config'
+
+- name: Add KUBECONFIG env var for root
+  lineinfile:
+    path: /root/.bashrc
+    line: 'export KUBECONFIG=/root/.kube/config'
+
+- name: Apply flannel
+  shell: kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/v0.9.1/Documentation/kube-flannel.yml && touch /home/kube/.flannel_applied
+  become: 'yes'
+  become_user: kube
+  args:
+    creates: /home/kube/.flannel_applied
+
+#- pause: minutes=1
+- wait_for: timeout=60
+  when: add_node is not defined
+
+- shell: nohup bash -c "sleep 2s && shutdown -r now" &
+  when: add_node is not defined
+
+# This pause is mandatory, otherwise the existing control connection gets reused!
+#- pause: seconds=30
+- name: Wait 300 seconds for port 22 to become open and contain "OpenSSH"
+  wait_for:
+    port: 22
+    host: '{{ (ansible_ssh_host|default(ansible_host))|default(inventory_hostname) }}'
+    search_regex: OpenSSH
+    delay: 10
+  connection: local
+  when: add_node is not defined
+
+
+# Now we will run a local 'ansible -m ping' on this host until it returns.
+# This works with the existing ansible hosts inventory and so any custom ansible_ssh_hosts definitions are being used
+- local_action: shell ansible -u {{ ansible_user_id }} -m ping {{ hostvars[groups['kube-masters'][0]].ansible_ssh_host }}
+  register: result
+  until: result.rc == 0
+  retries: 30
+  delay: 10
+  when: add_node is not defined
+
+# And finally, execute 'uptime' when the host is back.
+- shell: uptime
+
+# - name: iptables add POSTROUTING for 10.244.0.0/16
+#   iptables:
+#     action: append
+#     table: nat
+#     chain: POSTROUTING
+#     source: "10.244.0.0/16"
+#     destination: "10.244.0.0/16"
+#     jump: RETURN
+
+# - name: iptables add POSTROUTING for 10.244.0.0/16
+#   iptables:
+#     action: append
+#     table: nat
+#     chain: POSTROUTING
+#     source: "10.244.0.0/16"
+#     destination: "!224.0.0.0/4"
+#     jump: MASQUERADE
+
+# - name: iptables add POSTROUTING for 10.244.0.0/16
+#   iptables:
+#     action: append
+#     table: nat
+#     chain: POSTROUTING
+#     source: "!10.244.0.0/16"
+#     destination: "10.244.0.0/24"
+#     jump: RETURN
+
+# - name: iptables add POSTROUTING for 10.244.0.0/16
+#   iptables:
+#     action: append
+#     table: nat
+#     chain: POSTROUTING
+#     source: "!10.244.0.0/16"
+#     destination: "10.244.0.0/16"
+#     jump: MASQUERADE
+
+# - name: Ensure dashboard and heapster yaml directories exist
+#   become: 'yes'
+#   become_user: kube
+#   file: dest={{ item }} state=directory
+#   with_items:
+#     - /home/kube/heapster
+#     - /home/kube/dashboard
+
+# - pause: minutes=5
+
+# - name: Copy Heapster deploys
+#   become: 'yes'
+#   become_user: kube
+#   copy: src="{{ item }}" dest=/home/kube/heapster/
+#   with_fileglob:
+#     - heapster/*
+
+# - name: Copy Dashboard deploys
+#   become: 'yes'
+#   become_user: kube
+#   copy: src=dashboard/kubernetes-dashboard.yaml dest=/home/kube/dashboard/
+
+# - name: Apply heapster
+#   shell: kubectl apply -f /home/kube/heapster
+#   become: 'yes'
+#   become_user: kube
+
+# - pause: minutes=5
+
+# - name: Apply dashboard
+#   shell: kubectl apply -f /home/kube/dashboard
+#   become: 'yes'
+#   become_user: kube
+

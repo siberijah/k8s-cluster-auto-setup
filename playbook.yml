@@ -1,0 +1,97 @@
+---
+- hosts: kube-masters
+  remote_user: root
+  roles:
+    - ansible-role-kube-master
+
+- hosts: kube-nodes
+  remote_user: root
+  roles:
+    - ansible-role-kube-node
+
+- hosts: kube-masters
+  remote_user: root
+  roles:
+    - ansible-role-kube-master-dashboard
+
+- hosts: kube-masters
+  remote_user: root
+  tasks:
+
+  - name: Waiting for Kubernetes state ready, just wait please around 15-20 minutes summary
+    shell: kubectl get pods -n kube-system --no-headers | grep -vc Running
+    become: 'yes'
+    become_user: kube
+    register: kubectl_is_ready
+    until: kubectl_is_ready.rc == 1
+    retries: 42 
+    delay: 10
+    ignore_errors: yes
+
+  - name: Checking if kubernetes isn't in the wrong state
+    shell: kubectl get pods -n kube-system | grep -cE "Error|Unknown|NodeLost"
+    become: 'yes'
+    become_user: kube
+    register: kubernetes_failed_state
+    ignore_errors: yes
+    when: kubectl_is_ready.rc == 0
+
+  - name: Rebooting kubelet and docker if failed
+    service: name={{item}} state=restarted
+    with_items:
+      - kubelet
+      - docker
+    ignore_errors: yes
+    when: kubernetes_failed_state.rc == 0
+
+  - name: Waiting for kube-apiserver is up
+    wait_for: port=6443 delay=3 timeout=60
+    register: port6443
+
+  - fail: msg="Playbook FUCKED! Try again later =) Bye-bye!"
+    when: port6443|failed
+
+  - name: Waiting for Kubernetes state ready, just wait please around 5-10 minutes more
+    shell: kubectl get pods -n kube-system --no-headers | grep -vc Running
+    become: 'yes'
+    become_user: kube
+    register: kubectl_is_ready
+    until: kubectl_is_ready.rc == 1
+    retries: 50
+    delay: 10
+    ignore_errors: yes
+  
+  - copy: src=roles/ansible-role-kube-master/files/dashboard/kubernetes-dashboard-add-root.yaml dest=/home/kube/dashboard/
+    become: 'yes'
+    become_user: kube
+
+  - name: Adding admin service account
+    shell: kubectl create -f /home/kube/dashboard/kubernetes-dashboard-add-root.yaml
+    become: 'yes'
+    become_user: kube
+    ignore_errors: yes
+
+  - name: Getting dashboard IP address
+    shell: echo $(curl -s ifconf.me)
+    become: 'yes'
+    become_user: kube
+    register: dashboard_ip
+
+  - name: Getting dashboard NodePort
+    shell: kubectl get services -n kube-system | grep kubernetes-dashboard | awk '{print $5}' | sed 's/:\|\// /g' | awk '{print $2}'
+    become: 'yes'
+    become_user: kube
+    register: dashboard_port
+
+  - name: Getting dashboard root account token
+    shell: kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep kubernetes-dashboard-root | awk '{print $1}') | grep token | tail -1 | awk '{print $2}'
+    become: 'yes'
+    become_user: kube
+    register: dashboard_root_token
+
+  - name: WRITE DOWN A DASHBOARD IP ADDRESS !!!
+    debug: msg="https://{{ dashboard_ip.stdout }}:{{ dashboard_port.stdout }}"
+
+  - name: WRITE DOWN AN ACCESS TOKEN !!!
+    debug: msg="{{ dashboard_root_token.stdout }}"
+

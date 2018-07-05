@@ -1,0 +1,17 @@
+---
+all:
+  children:
+    kube:
+      children:
+        kube-masters: []
+        kube-nodes: []
+    kube-masters:
+      hosts:
+        master-node:
+          ansible_ssh_host: 77.244.217.53
+    kube-nodes:
+      hosts:
+        node-1:
+          ansible_ssh_host: 77.244.217.54
+        node-2:
+...

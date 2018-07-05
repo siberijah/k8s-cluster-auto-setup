@@ -1,0 +1,130 @@
+---
+- name: Load some modules
+  modprobe:
+    name: br_netfilter
+    state: present
+
+- name: Set some sysctl variables
+  sysctl:
+    name: '{{ item }}'
+    value: 1
+    state: present
+    reload: 'yes'
+  with_items:
+    - net.bridge.bridge-nf-call-ip6tables
+    - net.bridge.bridge-nf-call-iptables
+
+- name: "Build hosts file"
+  lineinfile: dest=/etc/hosts regexp='.*{{ item }}$' line="{{ hostvars[item].ansible_ssh_host }} {{item}}" state=present
+  with_items: "{{ groups['all'] }}"
+
+- name: Ensure firewalld is stopped
+  systemd: name=firewalld state=stopped
+  ignore_errors: yes
+
+- name: Ensure firewalld is disabled
+  systemd: name=firewalld enabled=no
+  ignore_errors: yes
+
+- name: Ensure iptables is present.
+  package: name=iptables-services state=present
+
+- name: ensure iptables is enabled
+  systemd: name=iptables.service enabled=yes
+
+- name: iptables remove FORWARD reject
+  iptables:
+    state: absent
+    chain: FORWARD
+    reject_with: icmp-host-prohibited
+
+- name: iptables add INPUT ACCEPT for hosts veci-verca
+  iptables:
+    action: insert
+    chain: INPUT
+    source: "{{ hostvars[item].ansible_ssh_host }}"
+    jump: ACCEPT
+  with_items: "{{ groups['all'] }}"
+
+- shell: service iptables save
+
+- name: Install kubernetes dependencies
+  yum:
+    name: '{{ item }}'
+    state: present
+  with_items:
+    - yum-utils
+    - device-mapper-persistent-data
+    - lvm2
+    - conntrack-tools
+
+- name: Disable SELinux
+  selinux:
+    state: disabled
+
+- name: Disable obsoletes in yum
+  lineinfile:
+    path: /etc/yum.conf
+    regexp: '^obsoletes='
+    line: 'obsoletes=0'
+
+- name: Add docker stable repo
+  yum_repository:
+    name: docker
+    description: Docker CE Stable
+    file: docker
+    baseurl: https://download-stage.docker.com/linux/centos/7/$basearch/stable
+    enabled: 'yes'
+    gpgcheck: 'yes'
+    gpgkey: https://download-stage.docker.com/linux/centos/gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+
+- name: Install docker package
+  package:
+    name: '{{ item }}'
+  with_items:
+    - docker-ce-17.03.2.ce-1.el7.centos
+    - docker-ce-selinux-17.03.2.ce-1.el7.centos
+
+- name: Ensure docker started and enabled
+  service:
+    name: docker
+    state: started
+    enabled: 'yes'
+
+- name: Add kubernetes repo
+  yum_repository:
+    name: kubernetes
+    description: kubernetes repo
+    file: kubernetes
+    baseurl: https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+    enabled: 'yes'
+    gpgcheck: 'yes'
+    gpgkey: https://packages.cloud.google.com/yum/doc/yum-key.gpg
+
+- name: Install kubernetes packages
+  yum:
+    name: '{{ item }}-{{ kube_version }}'
+    state: present
+  with_items:
+    - kubelet
+    - kubectl
+
+- name: Install kubeadm fixed package # https://github.com/kubernetes/kubernetes/issues/53288
+  yum:
+    name: 'kubeadm-{{ kube_version }}-1'
+    state: present
+
+- name: Fix systemd files for kubeadm
+  replace:
+    path: /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+    regexp: 'cgroup-driver=systemd'
+    replace: 'cgroup-driver=cgroupfs'
+  notify:
+    - systemd daemon-reload
+    - restart kubelet
+
+- name: Ensure kubelet started and enabled
+  service:
+    name: kubelet
+    state: started
+    enabled: 'yes'
